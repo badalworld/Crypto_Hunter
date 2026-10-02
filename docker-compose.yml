@@ -1,0 +1,18 @@
+services:
+  crypto-hunter:
+    build: .
+    container_name: crypto-hunter
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      CH_HOST: 0.0.0.0
+      CH_PORT: 8080
+    ports:
+      - "127.0.0.1:8080:8080"   # keep local; put TLS reverse-proxy in front for remote access
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config.yaml:/app/config.yaml:ro
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }

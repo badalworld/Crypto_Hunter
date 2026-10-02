@@ -1,0 +1,23 @@
+# /etc/systemd/system/crypto-hunter.service
+[Unit]
+Description=Crypto Hunter – MEXC Futures AO divergence bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hunter
+WorkingDirectory=/opt/crypto_hunter
+EnvironmentFile=/opt/crypto_hunter/.env
+ExecStart=/opt/crypto_hunter/.venv/bin/python -m crypto_hunter
+Restart=always
+RestartSec=5
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/crypto_hunter/data /opt/crypto_hunter/logs
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
