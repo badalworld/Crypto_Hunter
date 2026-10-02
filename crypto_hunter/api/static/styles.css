@@ -138,7 +138,12 @@ canvas{width:100%;display:block}
 @media (max-width:700px){.kpis{grid-template-columns:repeat(2,1fr)}.top{flex-wrap:wrap}.statusbar{order:3;width:100%}}
 
 /* logo + ip */
-.logo-img{width:46px;height:46px;border-radius:12px;object-fit:cover;box-shadow:0 0 26px rgba(52,211,153,.35);border:1px solid rgba(52,211,153,.35)}
+.logo-wrap{position:relative;width:48px;height:48px;flex:0 0 48px}
+.logo-wrap::before{content:"";position:absolute;inset:-6px;border-radius:16px;background:radial-gradient(circle,rgba(110,231,255,.35),rgba(167,139,250,.15) 60%,transparent 75%);filter:blur(8px);animation:breathe 4s ease-in-out infinite}
+.logo-img{position:relative;width:48px;height:48px;border-radius:12px;display:block;box-shadow:0 6px 24px rgba(59,130,246,.35);transition:transform .3s}
+.logo-img:hover{transform:translateY(-1px) scale(1.04)}
+.logo-img.sm{width:32px;height:32px;border-radius:9px;box-shadow:0 4px 14px rgba(59,130,246,.3)}
+@keyframes breathe{0%,100%{opacity:.6;transform:scale(1)}50%{opacity:1;transform:scale(1.08)}}
 .pill.ip{cursor:pointer;color:var(--txt)}
 .pill.ip:hover{background:rgba(255,255,255,.14)}
 .ip-box{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:rgba(52,211,153,.07);border:1px solid rgba(52,211,153,.3);margin-bottom:10px}

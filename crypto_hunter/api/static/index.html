@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Crypto Hunter · MEXC Futures AO Divergence Bot</title>
 <link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#070a14">
 <link rel="stylesheet" href="/static/styles.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -14,7 +16,7 @@
 
 <header class="top glass">
   <div class="brand">
-    <img class="logo-img" src="/static/logo.png" alt="Crypto Hunter">
+    <div class="logo-wrap"><img class="logo-img" src="/static/logo.png" alt="Crypto Hunter" width="48" height="48"></div>
     <div>
       <h1>Crypto Hunter</h1>
       <p>MEXC Futures · AO Divergence · 5m</p>
@@ -98,7 +100,7 @@
 <!-- Settings drawer -->
 <div class="drawer-bg hidden" id="drawer-bg"></div>
 <aside class="drawer glass hidden" id="drawer">
-  <div class="drawer-h"><h2>Settings</h2><button class="btn ghost tiny" id="btn-close-drawer">✕</button></div>
+  <div class="drawer-h"><div class="brand"><img class="logo-img sm" src="/static/logo.png" alt="" width="32" height="32"><h2>Settings</h2></div><button class="btn ghost tiny" id="btn-close-drawer">✕</button></div>
   <div class="drawer-body">
     <section class="set-group">
       <h3>MEXC API credentials</h3>
