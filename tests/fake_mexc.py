@@ -139,6 +139,12 @@ class FakeMexc:
             return self._create_order(j)
         if p.startswith("/api/v1/private/order/get/"):
             return self.ok(self.orders.get(p.rsplit("/", 1)[1]))
+        if p == "/api/v1/private/order/cancel":
+            for oid in j:
+                o = self.orders.get(str(oid))
+                if o and o.get("state") == 2:
+                    o["state"] = 4
+            return self.ok([{"orderId": str(oid), "errorCode": 0} for oid in j])
         if p == "/api/v1/private/stoporder/open_orders":
             return self.ok([s for s in self.stop_orders.values() if s["state"] == 1])
         if p == "/api/v1/private/stoporder/change_plan_price":

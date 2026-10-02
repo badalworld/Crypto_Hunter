@@ -269,6 +269,10 @@ class MexcFuturesREST:
     async def get_order(self, order_id: str) -> Dict[str, Any]:
         return await self._request("GET", f"/api/v1/private/order/get/{order_id}", private=True) or {}
 
+    async def cancel_orders(self, order_ids: List[str | int]) -> Any:
+        """POST order/cancel – body is a JSON array of order ids."""
+        return await self._request("POST", "/api/v1/private/order/cancel", body=[str(i) for i in order_ids], private=True)
+
     async def cancel_all_orders(self, symbol: Optional[str] = None) -> Any:
         return await self._request("POST", "/api/v1/private/order/cancel_all", body={"symbol": symbol}, private=True)
 

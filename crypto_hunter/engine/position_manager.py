@@ -13,7 +13,6 @@ All state lives in SQLite (``positions`` table) so a restart resumes exactly whe
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from dataclasses import dataclass, field, asdict
@@ -281,9 +280,20 @@ class PositionManager:
 
     async def finalize(self, p: ManagedPosition, exit_price: Optional[float], reason: Optional[str],
                        ledger: Optional[PositionLedger] = None) -> Dict[str, Any]:
-        """Record the closed trade using MEXC's settlement numbers, drop the managed position."""
-        self.positions.pop(p.key, None)
-        await self.db.delete_position(p.symbol, p.side)
+        """Record the closed trade using MEXC's settlement numbers, then drop the managed position.
+
+        The position stays registered (status "closing") until the trade row is written, so a crash
+        during the ledger lookup can never lose a closed trade from history; the status guard keeps
+        the trailing/failsafe logic away from it meanwhile."""
+        p.status = "closing"
+        self._closing.add(p.key)
+        try:
+            return await self._finalize_locked(p, exit_price, reason, ledger)
+        finally:
+            self._closing.discard(p.key)
+
+    async def _finalize_locked(self, p: ManagedPosition, exit_price: Optional[float], reason: Optional[str],
+                               ledger: Optional[PositionLedger]) -> Dict[str, Any]:
         if ledger is None and p.position_id:
             ledger = await self._lookup_ledger(p, attempts=5)
         if ledger:
@@ -308,6 +318,9 @@ class PositionManager:
             "signal_json": p.signal_json,
         }
         trade["id"] = await self.db.insert_trade(trade)
+        self.positions.pop(p.key, None)
+        await self.db.delete_position(p.symbol, p.side)
+        p.status = "closed"
         level = "info" if pnl >= 0 else "warn"
         await self.emit(level, "exit", f"{p.symbol} {p.side} closed [{reason}] net {pnl:+.4f} USDT "
                         f"(gross {gross:+.4f}, fees -{fee:.4f}, funding {funding:+.4f}; {roi:+.1f}% ROI, peak {p.peak_roi:.1f}%)",

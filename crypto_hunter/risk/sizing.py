@@ -7,7 +7,6 @@ Both are recalculated from *current equity* on every entry, so winners compound.
 """
 from __future__ import annotations
 
-import math
 import time
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional

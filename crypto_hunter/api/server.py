@@ -9,6 +9,7 @@ Security
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import math
@@ -75,16 +76,22 @@ def create_app(settings: AppSettings, cfg: BotConfig, db: Database) -> FastAPI:
     app.state.bot = bot
 
     # ------------------------------------------------------------------ auth
+    def _token_ok(tok: Optional[str]) -> bool:
+        return bool(tok) and hmac.compare_digest(str(tok), str(settings.dashboard_token))
+
     async def auth(request: Request) -> None:
         if not settings.dashboard_token:
             return
         tok = request.headers.get("authorization", "").removeprefix("Bearer ").strip() or request.query_params.get("token")
-        if tok != settings.dashboard_token:
+        if not _token_ok(tok):
             raise HTTPException(401, "invalid dashboard token")
 
     # ------------------------------------------------------------- lifecycle
     @app.on_event("startup")
     async def _startup() -> None:
+        if not settings.dashboard_token and settings.host not in ("127.0.0.1", "localhost", "::1"):
+            log.warning("Dashboard is bound to %s WITHOUT a CH_DASHBOARD_TOKEN – anyone who can reach the port can "
+                        "start/stop the bot and set API keys. Set CH_DASHBOARD_TOKEN or bind to 127.0.0.1.", settings.host)
         stored = await db.load_settings()
         if stored:
             try:
@@ -200,7 +207,7 @@ def create_app(settings: AppSettings, cfg: BotConfig, db: Database) -> FastAPI:
     # -------------------------------------------------------------- websocket
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket, token: Optional[str] = None) -> None:
-        if settings.dashboard_token and token != settings.dashboard_token:
+        if settings.dashboard_token and not _token_ok(token):
             await ws.close(code=4401)
             return
         await ws.accept()

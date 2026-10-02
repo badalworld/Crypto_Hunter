@@ -110,7 +110,10 @@ class PublicWS:
                     await self._resubscribe()
                     async for raw in ws:
                         self.last_message_ts = time.time()
-                        await self._handle(raw)
+                        try:
+                            await self._handle(raw)
+                        except Exception:  # a handler bug must not tear down the market-data link
+                            log.exception("WS message handler failed")
             except asyncio.CancelledError:
                 break
             except (ConnectionClosed, OSError, asyncio.TimeoutError, Exception) as exc:

@@ -1,6 +1,5 @@
 """End-to-end engine test against the in-process MEXC emulator (signature-checked)."""
 import asyncio
-import time
 from pathlib import Path
 
 import pytest

@@ -76,8 +76,11 @@ class PrivateWS:
                     self._ping_task = asyncio.create_task(self._pinger())
                     async for raw in ws:
                         self.last_message_ts = time.time()
-                        if await self._handle(raw):
-                            backoff = 1.0
+                        try:
+                            if await self._handle(raw):
+                                backoff = 1.0
+                        except Exception:  # pragma: no cover
+                            log.exception("private WS message handler failed")
             except asyncio.CancelledError:
                 break
             except (ConnectionClosed, OSError, asyncio.TimeoutError, Exception) as exc:

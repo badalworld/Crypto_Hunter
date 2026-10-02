@@ -18,7 +18,7 @@ so the same threshold works for BTC and for a $0.0001 meme coin.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import numpy as np
 

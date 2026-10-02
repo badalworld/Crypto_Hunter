@@ -20,13 +20,13 @@ import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
 from ..config import AppSettings, BotConfig
-from ..exchange.models import AccountAsset, Contract, ExchangePosition, MexcAPIError, Ticker
+from ..exchange.models import AccountAsset, Contract, ExchangePosition, MexcAPIError
 from ..exchange.rate_limiter import RateLimiter
 from ..exchange.rest import MexcFuturesREST
 from ..exchange.ws_private import PrivateWS
 from ..exchange.ws_public import PublicWS
 from ..persistence.db import Database
-from ..risk.roi import price_for_roi, roi_pct
+from ..risk.roi import price_for_roi
 from ..risk.sizing import compute_size, projection_curve, required_daily_growth
 from ..security import Cipher, Credentials, MasterKey, REDACTOR
 from ..strategy.divergence import Bars, detect_divergence
@@ -507,6 +507,11 @@ class Bot:
                 await self.emit("error", "entry_error", f"{symbol} {side}: order rejected – {exc.message} (code {exc.code})", symbol)
                 return
             if fill.filled_vol <= 0 or fill.avg_price <= 0:
+                if fill.state not in (3, 4, 5):  # still live/unknown -> never leave an unmanaged resting order behind
+                    try:
+                        await self.rest.cancel_orders([fill.order_id])
+                    except MexcAPIError as exc:
+                        log.warning("cancel of unfilled entry %s failed: %s", fill.order_id, exc.message)
                 await self.emit("error", "entry_error", f"{symbol} {side}: order {fill.order_id} not filled (state {fill.state})", symbol, fill.raw)
                 return
             entry = fill.avg_price

@@ -1,7 +1,6 @@
 import asyncio
 import hashlib
 import hmac
-import math
 import time
 
 import numpy as np
