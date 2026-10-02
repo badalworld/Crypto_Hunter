@@ -20,10 +20,10 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from ..config import BotConfig
-from ..exchange.models import Contract, ExchangePosition, MexcAPIError
+from ..exchange.models import Contract, ExchangePosition, MexcAPIError, PositionLedger
 from ..persistence.db import Database
 from ..risk.roi import price_for_roi, ratchet, roi_pct, trailing_stop_roi, unrealized_pnl
-from .executor import OrderExecutor
+from .executor import OrderExecutor, PositionGone
 
 log = logging.getLogger("ch.positions")
 
@@ -54,6 +54,9 @@ class ManagedPosition:
     tp_plan_order_id: Optional[str] = None
     signal_json: Optional[str] = None
     status: str = "open"
+    fee_paid: float = 0.0            # trading fees charged so far (MEXC `realised` while open = -fees)
+    funding: float = 0.0             # funding so far (MEXC holdFee, + received / - paid)
+    exchange_unrealized: Optional[float] = None   # MEXC unRealizedPnl (mark-price based)
     updated_at: float = field(default_factory=time.time)
     # runtime only
     last_price: float = 0.0
@@ -63,6 +66,7 @@ class ManagedPosition:
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
     _updating: bool = False
     _last_persist: float = 0.0
+    taker_fee_rate: float = 0.0006
 
     @property
     def key(self) -> Tuple[str, str]:
@@ -73,7 +77,8 @@ class ManagedPosition:
 
     def row(self) -> Dict[str, Any]:
         d = {k: v for k, v in asdict(self).items()
-             if k not in ("last_price", "fair_price", "breach_since", "tp_breach_since", "_lock", "_updating", "_last_persist")}
+             if k not in ("last_price", "fair_price", "breach_since", "tp_breach_since", "_lock", "_updating",
+                          "_last_persist", "taker_fee_rate")}
         return d
 
     @classmethod
@@ -86,9 +91,16 @@ class ManagedPosition:
         cur_roi = self.roi(px)
         d = self.row()
         d.pop("signal_json", None)
+        upnl = (self.exchange_unrealized if self.exchange_unrealized is not None
+                else unrealized_pnl(self.side, self.entry_price, px, self.vol, self.contract_size))
+        est_close_fee = self.vol * self.contract_size * px * self.taker_fee_rate
         d.update({
             "mark_price": px, "last_price": self.last_price or px, "roi": cur_roi,
-            "unrealized_pnl": unrealized_pnl(self.side, self.entry_price, px, self.vol, self.contract_size),
+            "unrealized_pnl": upnl,
+            "fee_paid": self.fee_paid, "est_close_fee": est_close_fee, "funding": self.funding,
+            "net_pnl": upnl - self.fee_paid - est_close_fee + self.funding,
+            "net_roi": ((upnl - self.fee_paid - est_close_fee + self.funding) / self.margin * 100.0) if self.margin else cur_roi,
+            "pnl_source": "exchange" if self.exchange_unrealized is not None else "estimate",
             "stop_roi_effective": self.stop_roi if self.stop_roi is not None else self.roi(self.initial_stop_price),
             "trailing_active": self.stop_roi is not None,
             "notional": self.vol * self.contract_size * self.entry_price,
@@ -118,6 +130,9 @@ class PositionManager:
         self.positions = {}
         for r in rows:
             p = ManagedPosition.from_row(r)
+            c = self.contracts.get(p.symbol)
+            if c:
+                p.taker_fee_rate = c.taker_fee
             self.positions[p.key] = p
         if rows:
             log.info("Restored %d managed positions from DB: %s", len(rows), [p.symbol for p in self.positions.values()])
@@ -139,6 +154,9 @@ class PositionManager:
 
     # ------------------------------------------------------------------ open
     async def register(self, p: ManagedPosition) -> None:
+        c = self.contracts.get(p.symbol)
+        if c:
+            p.taker_fee_rate = c.taker_fee
         self.positions[p.key] = p
         await self.persist(p)
         if self.on_changed:
@@ -176,7 +194,7 @@ class PositionManager:
 
     async def _apply_trail(self, p: ManagedPosition, new_stop_roi: float) -> None:
         async with p._lock:
-            if p.status != "open" or (p.stop_roi is not None and new_stop_roi <= p.stop_roi):
+            if p.key not in self.positions or p.status != "open" or (p.stop_roi is not None and new_stop_roi <= p.stop_roi):
                 return
             contract = self.contracts.get(p.symbol)
             if contract is None:
@@ -199,8 +217,11 @@ class PositionManager:
                                 {"prev_stop_roi": prev, "stop_roi": new_stop_roi, "stop_price": p.stop_price, "peak_roi": p.peak_roi})
                 if self.on_changed:
                     await self.on_changed(p)
+            except PositionGone:
+                log.info("%s %s closed while trailing update was in flight – ignored", p.symbol, p.side)
             except MexcAPIError as exc:
-                await self.emit("error", "trail_error", f"{p.symbol}: failed to move stop ({exc.message})", p.symbol)
+                if p.key in self.positions:
+                    await self.emit("error", "trail_error", f"{p.symbol}: failed to move stop ({exc.message})", p.symbol)
             except Exception as exc:  # pragma: no cover
                 log.exception("trail update failed for %s", p.symbol)
                 await self.emit("error", "trail_error", f"{p.symbol}: {exc}", p.symbol)
@@ -238,7 +259,7 @@ class PositionManager:
             fill = await self.exe.close_position(p.symbol, p.side, p.vol, ref_price, p.position_id, contract)
             exit_px = fill.avg_price or ref_price
             await self.exe.cancel_protection(p.symbol, p.position_id, [p.sl_plan_order_id or "", p.tp_plan_order_id or ""])
-            await self.finalize(p, exit_px, reason)
+            await self.finalize(p, exit_px, reason)  # ledger lookup inside (fees + funding from MEXC)
         except MexcAPIError as exc:
             p.status = "open"
             await self.emit("error", "close_error", f"{p.symbol}: close failed ({exc.message})", p.symbol)
@@ -259,23 +280,37 @@ class PositionManager:
         return "SL"
 
     async def finalize(self, p: ManagedPosition, exit_price: Optional[float], reason: Optional[str],
-                       realised: Optional[float] = None) -> Dict[str, Any]:
-        """Record the closed trade, drop the managed position, fire callbacks."""
+                       ledger: Optional[PositionLedger] = None) -> Dict[str, Any]:
+        """Record the closed trade using MEXC's settlement numbers, drop the managed position."""
         self.positions.pop(p.key, None)
         await self.db.delete_position(p.symbol, p.side)
-        exit_px = exit_price or p.fair_price or p.last_price or p.entry_price
+        if ledger is None and p.position_id:
+            ledger = await self._lookup_ledger(p, attempts=5)
+        if ledger:
+            exit_px = ledger.close_avg_price or exit_price or p.fair_price or p.entry_price
+            gross, fee, funding, pnl = ledger.close_pnl, ledger.total_fee, ledger.funding, ledger.realised
+            ex_roi, source = ledger.profit_ratio, "exchange"
+        else:
+            exit_px = exit_price or p.fair_price or p.last_price or p.entry_price
+            gross = unrealized_pnl(p.side, p.entry_price, exit_px, p.vol, p.contract_size)
+            fee = p.fee_paid + p.vol * p.contract_size * exit_px * p.taker_fee_rate
+            funding = p.funding
+            pnl = gross - fee + funding
+            ex_roi, source = None, "estimate"
+            await self.emit("warn", "ledger", f"{p.symbol}: MEXC ledger not available yet – PnL estimated (fees {fee:.4f})", p.symbol)
         reason = reason or self.classify_exit(p, exit_px)
-        pnl = realised if realised is not None else unrealized_pnl(p.side, p.entry_price, exit_px, p.vol, p.contract_size)
         roi = (pnl / p.margin * 100.0) if p.margin > 0 else p.roi(exit_px)
         trade = {
             "symbol": p.symbol, "side": p.side, "entry_price": p.entry_price, "exit_price": exit_px, "vol": p.vol,
-            "contract_size": p.contract_size, "leverage": p.leverage, "margin": p.margin, "pnl": pnl, "roi": roi,
-            "peak_roi": p.peak_roi, "reason": reason, "opened_at": p.opened_at, "closed_at": time.time(),
+            "contract_size": p.contract_size, "leverage": p.leverage, "margin": p.margin,
+            "pnl": pnl, "gross_pnl": gross, "fee": fee, "funding": funding, "exchange_roi": ex_roi, "pnl_source": source,
+            "roi": roi, "peak_roi": p.peak_roi, "reason": reason, "opened_at": p.opened_at, "closed_at": time.time(),
             "signal_json": p.signal_json,
         }
         trade["id"] = await self.db.insert_trade(trade)
         level = "info" if pnl >= 0 else "warn"
-        await self.emit(level, "exit", f"{p.symbol} {p.side} closed [{reason}] pnl {pnl:+.4f} USDT ({roi:+.1f}% ROI, peak {p.peak_roi:.1f}%)",
+        await self.emit(level, "exit", f"{p.symbol} {p.side} closed [{reason}] net {pnl:+.4f} USDT "
+                        f"(gross {gross:+.4f}, fees -{fee:.4f}, funding {funding:+.4f}; {roi:+.1f}% ROI, peak {p.peak_roi:.1f}%)",
                         p.symbol, {"trade": trade})
         if self.on_closed:
             await self.on_closed(trade)
@@ -300,10 +335,9 @@ class PositionManager:
                     continue
                 if time.time() - p.opened_at < 5:
                     continue  # just opened; exchange listing may lag
-                exit_px, realised = await self._lookup_close(p)
-                await self.finalize(p, exit_px, None, realised)
+                await self.finalize(p, None, None)
             else:
-                changed = False
+                changed = self.apply_exchange_state(p, ep)
                 if p.position_id != ep.position_id:
                     p.position_id = ep.position_id; changed = True
                 if abs(p.vol - ep.hold_vol) > 1e-9:
@@ -319,17 +353,32 @@ class PositionManager:
             if key not in self.positions:
                 await adopt(ep)
 
-    async def _lookup_close(self, p: ManagedPosition) -> Tuple[Optional[float], Optional[float]]:
-        try:
-            hist = await self.exe.rest.get_history_positions(p.symbol, page_size=10)
-        except MexcAPIError:
-            return None, None
-        for h in hist:
-            if p.position_id and str(h.get("positionId")) == str(p.position_id):
-                close_px = float(h.get("closeAvgPrice") or 0) or None
-                realised = float(h.get("realised")) if h.get("realised") is not None else None
-                return close_px, realised
-        return None, None
+    async def _lookup_ledger(self, p: ManagedPosition, attempts: int = 1) -> Optional[PositionLedger]:
+        """Fetch MEXC's closed-position ledger; the history endpoint can lag a fill by a second or two."""
+        for i in range(attempts):
+            try:
+                hist = await self.exe.rest.get_history_positions(p.symbol, page_size=10)
+            except MexcAPIError as exc:
+                log.debug("history_positions %s: %s", p.symbol, exc)
+                hist = []
+            for h in hist:
+                if p.position_id and str(h.get("positionId")) == str(p.position_id) and int(h.get("state", 3) or 3) == 3:
+                    return PositionLedger.from_api(h)
+            if i < attempts - 1:
+                await asyncio.sleep(0.8 * (i + 1))
+        return None
+
+    def apply_exchange_state(self, p: ManagedPosition, ep: ExchangePosition) -> bool:
+        """Copy MEXC's live fee / funding / unrealised numbers onto the managed position."""
+        changed = False
+        fee_paid = max(0.0, -(ep.realised - ep.hold_fee))  # realised while open = -fees + funding
+        if abs(p.fee_paid - fee_paid) > 1e-9:
+            p.fee_paid, changed = fee_paid, True
+        if abs(p.funding - ep.hold_fee) > 1e-9:
+            p.funding, changed = ep.hold_fee, True
+        if ep.unrealized is not None and p.exchange_unrealized != ep.unrealized:
+            p.exchange_unrealized = ep.unrealized
+        return changed
 
     async def on_private_position(self, data: Dict[str, Any]) -> None:
         """``push.personal.position`` handler – fast close detection."""
@@ -342,9 +391,10 @@ class PositionManager:
             return
         if ep.hold_vol <= 0 and p.status == "open" and p.key not in self._closing:
             await asyncio.sleep(0.5)  # let history endpoint catch up
-            exit_px, realised = await self._lookup_close(p)
-            await self.finalize(p, exit_px, None, realised)
+            await self.finalize(p, None, None)
         elif ep.hold_vol > 0:
+            changed = self.apply_exchange_state(p, ep)
             if p.position_id != ep.position_id or abs(p.vol - ep.hold_vol) > 1e-9:
-                p.position_id, p.vol = ep.position_id, ep.hold_vol
+                p.position_id, p.vol, changed = ep.position_id, ep.hold_vol, True
+            if changed:
                 await self.persist(p)

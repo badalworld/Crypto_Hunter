@@ -72,12 +72,20 @@ class FakeMexc:
                 so["state"], so["triggerSide"] = 3, (2 if hit[0] == "SL" else 1)
                 self._close_position(pos, hit[1])
 
+    FEE = 0.0006
+    FUNDING = -0.0123  # funding paid while the position was open
+
     def _close_position(self, pos: Dict[str, Any], px: float) -> None:
         qty = pos["holdVol"] * 0.01  # contractSize 0.01
-        pnl = (px - pos["holdAvgPrice"]) * qty if pos["positionType"] == 1 else (pos["holdAvgPrice"] - px) * qty
+        gross = (px - pos["holdAvgPrice"]) * qty if pos["positionType"] == 1 else (pos["holdAvgPrice"] - px) * qty
+        close_fee = qty * px * self.FEE
+        total_fee = pos["openFee"] + close_fee
+        realised = gross - total_fee + self.FUNDING
         pos["holdVol"], pos["state"] = 0, 3
-        self.equity += pnl
-        self.history.insert(0, {**pos, "closeAvgPrice": px, "realised": pnl, "closeVol": pos["openVol"]})
+        self.equity += gross - close_fee + self.FUNDING
+        self.history.insert(0, {**pos, "closeAvgPrice": px, "closeVol": pos["openVol"], "closeProfitLoss": gross,
+                                "fee": -total_fee, "totalFee": total_fee, "holdFee": self.FUNDING, "realised": realised,
+                                "profitRatio": realised / pos["oim"]})
 
     # ------------------------------------------------------------ handlers
     async def handle(self, request: web.Request) -> web.Response:
@@ -118,7 +126,13 @@ class FakeMexc:
             self.leverage_calls.append(j)
             return self.ok()
         if p == "/api/v1/private/position/open_positions":
-            return self.ok([x for x in self.positions.values() if x["holdVol"] > 0])
+            out = []
+            for x in self.positions.values():
+                if x["holdVol"] > 0:
+                    qty = x["holdVol"] * 0.01
+                    upnl = (self.fair - x["holdAvgPrice"]) * qty if x["positionType"] == 1 else (x["holdAvgPrice"] - self.fair) * qty
+                    out.append({**x, "unRealizedPnl": upnl})
+            return self.ok(out)
         if p == "/api/v1/private/position/list/history_positions":
             return self.ok(self.history)
         if p == "/api/v1/private/order/create":
@@ -165,11 +179,13 @@ class FakeMexc:
             pid = self._pid
             lev = int(j["leverage"])
             im = vol * 0.01 * fill_px / lev
+            open_fee = vol * 0.01 * fill_px * self.FEE
             self.positions[pid] = {"positionId": pid, "symbol": j["symbol"], "positionType": 1 if side == 1 else 2,
                                    "openType": j["openType"], "state": 1, "holdVol": vol, "openVol": vol,
                                    "holdAvgPrice": fill_px, "openAvgPrice": fill_px, "im": im, "oim": im,
-                                   "leverage": lev, "realised": 0, "liquidatePrice": 0}
-            self.equity -= vol * 0.01 * fill_px * 0.0006
+                                   "leverage": lev, "realised": -open_fee, "holdFee": 0, "liquidatePrice": 0,
+                                   "openFee": open_fee, "unRealizedPnl": 0}
+            self.equity -= open_fee
             if j.get("stopLossPrice") or j.get("takeProfitPrice"):
                 self._sid += 1
                 self.stop_orders[self._sid] = {"id": self._sid, "orderId": 0, "symbol": j["symbol"], "positionId": pid,

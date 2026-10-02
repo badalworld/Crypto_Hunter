@@ -26,7 +26,8 @@ and a real-time glassmorphism dashboard.
 | Execution | Signed REST on `api.mexc.com`, pooled keep-alive, retry/back-off, per-endpoint limiter at 95 % of MEXC limits |
 | Market data | `wss://contract.mexc.com/edge` tickers + klines, private stream for positions/assets, auto-reconnect |
 | Persistence | SQLite WAL: positions (peak ROI, stop ROI, order ids), trades, equity, cooldowns, events |
-| Dashboard | Live equity vs projection, positions with ROI/peak/stop, trade history, metrics, signals, API budget, settings |
+| Dashboard | Live equity vs projection, positions with ROI/peak/stop, trade history, metrics, signals, API budget, settings, **server public IP for the MEXC key whitelist** |
+| PnL accounting | Net PnL taken from **MEXC's own position ledger** (`realised = closeProfitLoss + fee + holdFee`): price PnL, open+close trading fees and funding are stored and shown per trade; open positions show MEXC `unRealizedPnl`, fees charged so far, estimated close fee and funding |
 | Security | API keys Fernet-encrypted at rest, log redaction, optional dashboard bearer token |
 
 ## Quick start
@@ -47,10 +48,12 @@ python -m crypto_hunter
 # dashboard: http://localhost:8080/?token=<CH_DASHBOARD_TOKEN>
 ```
 
-1. Open **Settings → MEXC API credentials**, paste the API key + secret, **Save & verify**
+1. Open **Settings**. Copy the **server public IP** shown at the top of the credentials panel
+   (also in the header pill) and add it to the API key's IP whitelist on MEXC.
+2. In **MEXC API credentials**, paste the API key + secret, **Save & verify**
    (the bot calls `account/assets` to verify before storing them encrypted).
-2. Review the parameters (all pre-filled from `config.yaml`), **Apply configuration**.
-3. Press **▶ Start**. The scanner builds the watch-list within a few seconds, signals are
+3. Review the parameters (all pre-filled from `config.yaml`), **Apply configuration**.
+4. Press **▶ Start**. The scanner builds the watch-list within a few seconds, signals are
    evaluated at every 5-minute close.
 
 ### MEXC account prerequisites

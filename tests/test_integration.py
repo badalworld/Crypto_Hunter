@@ -70,6 +70,11 @@ async def test_full_trade_lifecycle(env):
     assert p.stop_plan_order_id is not None, "exchange TP/SL plan order should be discovered"
     rows = await db.list_positions()
     assert rows and rows[0]["stop_plan_order_id"] == p.stop_plan_order_id
+    # live fee / unrealised figures are copied from the exchange on sync
+    await asyncio.sleep(1.2)
+    assert p.fee_paid == pytest.approx(p.vol * 0.01 * p.entry_price * 0.0006, rel=1e-6)
+    d = p.to_dict()
+    assert d["pnl_source"] == "exchange" and d["net_pnl"] < d["unrealized_pnl"]
 
     # --- price rises: peak 35% ROI -> stop locks +20%
     entry = p.entry_price
@@ -122,8 +127,18 @@ async def test_full_trade_lifecycle(env):
     trades = await db.list_trades()
     assert len(trades) == 1
     t = trades[0]
-    assert t["reason"] == "TRAIL" and t["pnl"] > 0 and t["roi"] == pytest.approx(90, abs=1.5)
+    assert t["reason"] == "TRAIL" and t["pnl"] > 0
     assert t["exit_price"] == pytest.approx(entry * 1.09, rel=1e-4)
+    # PnL comes from MEXC's ledger: net = gross - fees + funding, exactly as the platform credits it
+    assert t["pnl_source"] == "exchange"
+    qty = t["vol"] * 0.01
+    assert t["gross_pnl"] == pytest.approx((t["exit_price"] - entry) * qty, rel=1e-6)
+    assert t["fee"] == pytest.approx(qty * entry * 0.0006 + qty * t["exit_price"] * 0.0006, rel=1e-6)
+    assert t["funding"] == pytest.approx(fake.FUNDING)
+    assert t["pnl"] == pytest.approx(t["gross_pnl"] - t["fee"] + t["funding"], abs=1e-9)
+    assert t["pnl"] == pytest.approx(fake.history[0]["realised"], abs=1e-9)
+    assert t["exchange_roi"] == pytest.approx(fake.history[0]["profitRatio"] * 100, rel=1e-6)
+    assert t["roi"] < 90  # net of fees/funding, below the price-only 90 % lock
     cds = await db.cooldowns()
     assert "TEST_USDT" in cds  # post-exit cooldown recorded
     m = await bot.metrics()

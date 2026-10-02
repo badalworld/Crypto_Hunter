@@ -163,6 +163,25 @@ realised PnL from `history_positions`), positions found on the exchange but unkn
 bot are adopted (existing TP/SL discovered or new protection armed).
 Trailing state therefore survives restarts and crashes; the ladder never resets.
 
+## 4b. PnL accounting – matching the MEXC platform
+
+The bot never *computes* realised PnL for the record; it reads MEXC's settlement for the
+position (`GET position/list/history_positions`, matched by `positionId`):
+
+| MEXC field | Stored as | Meaning |
+|---|---|---|
+| `closeProfitLoss` | `gross_pnl` | price PnL, fees excluded |
+| `totalFee` | `fee` | open + close trading fees (taker/maker as actually charged) |
+| `holdFee` | `funding` | funding received (+) / paid (−) over the holding period |
+| `realised` | `pnl` | **net** amount credited to the wallet = gross − fees + funding |
+| `profitRatio` | `exchange_roi` | MEXC's ROI on initial margin |
+
+`pnl_source = "exchange"` marks ledger-sourced rows. Only if the history endpoint is still
+empty after five retries is an estimate recorded (`pnl_source = "estimate"`, flagged in the
+UI). For open positions the sync loop copies `unRealizedPnl`, fees charged so far
+(`-(realised − holdFee)`) and `holdFee` from `open_positions`; the UI shows net PnL =
+unrealised − fees paid − estimated close fee + funding.
+
 ## 5. Dashboard (`api/`)
 
 FastAPI serves the static SPA and a `/ws` stream. The server pushes a full snapshot every

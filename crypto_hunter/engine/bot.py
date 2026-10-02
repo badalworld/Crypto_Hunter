@@ -38,6 +38,19 @@ from .position_manager import ManagedPosition, PositionManager
 
 log = logging.getLogger("ch.bot")
 
+
+def _local_ips() -> List[str]:
+    import socket
+    ips: List[str] = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            ip = info[4][0]
+            if ip not in ips and not ip.startswith("127.") and ":" not in ip:
+                ips.append(ip)
+    except Exception:
+        pass
+    return ips
+
 Broadcast = Callable[[Dict[str, Any]], Awaitable[None]]
 
 
@@ -82,6 +95,7 @@ class Bot:
         self.day_key: Optional[str] = None
         self.last_signals: List[Dict[str, Any]] = []
         self.account_ok = False
+        self.public_ip: Dict[str, Any] = {"ip": None, "ts": 0}
 
     # ================================================================== events
     async def emit(self, level: str, kind: str, message: str, symbol: Optional[str] = None,
@@ -173,10 +187,23 @@ class Bot:
         self.pm.update_config(cfg)
 
     # =============================================================== lifecycle
+    async def refresh_public_ip(self, force: bool = False) -> Dict[str, Any]:
+        if force or time.time() - (self.public_ip.get("ts") or 0) > 600 or not self.public_ip.get("ip"):
+            await self.rest.start()
+            self.public_ip = await self.rest.public_ip()
+            self.public_ip["local_ips"] = _local_ips()
+        return self.public_ip
+
     async def boot(self) -> None:
         await self.rest.start()
         await self.load_credentials()
+        try:
+            await self.scanner.refresh_contracts(force=True)
+            self.pm.contracts = self.scanner.contracts
+        except Exception as exc:
+            log.warning("contract list unavailable at boot: %s", exc)
         await self.pm.load()
+        asyncio.create_task(self.refresh_public_ip(force=True))
         self.session_start_equity = await self.db.kv_get("session_start_equity")
         day = await self.db.kv_get("day_start")
         if day:
@@ -585,6 +612,12 @@ class Bot:
             "avg_loss_roi": (sum(t["roi"] for t in losses) / len(losses)) if losses else 0.0,
             "profit_factor": (gross_win / gross_loss) if gross_loss > 0 else (float("inf") if gross_win > 0 else 0.0),
             "total_pnl": sum(t.get("pnl") or 0 for t in trades),
+            "total_gross_pnl": sum(t.get("gross_pnl") if t.get("gross_pnl") is not None else (t.get("pnl") or 0) for t in trades),
+            "total_fees": sum(t.get("fee") or 0 for t in trades),
+            "total_funding": sum(t.get("funding") or 0 for t in trades),
+            "open_fees": sum(p.fee_paid for p in self.pm.positions.values()),
+            "open_funding": sum(p.funding for p in self.pm.positions.values()),
+            "estimated_trades": sum(1 for t in trades if t.get("pnl_source") == "estimate"),
             "daily_pnl": sum(t.get("pnl") or 0 for t in today),
             "daily_pnl_equity": (equity - self.day_start_equity) if self.day_start_equity else 0.0,
             "max_drawdown_pct": max_dd,
@@ -615,6 +648,7 @@ class Bot:
             "rate_limits": self.rl.usage(),
             "last_errors": self._last_errors[-3:],
             "server_time": time.time(),
+            "public_ip": self.public_ip,
         }
 
     def account_dict(self) -> Dict[str, Any]:

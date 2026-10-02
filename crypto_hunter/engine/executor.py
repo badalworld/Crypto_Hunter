@@ -34,6 +34,10 @@ ORDER_TYPE = {"market": 5, "ioc": 3}
 STATE_FILLED, STATE_CANCELED, STATE_INVALID = 3, 4, 5
 
 
+class PositionGone(Exception):
+    """Raised when a stop update is attempted for a position the exchange no longer holds."""
+
+
 @dataclass
 class FillResult:
     order_id: str
@@ -153,8 +157,13 @@ class OrderExecutor:
         if found:
             await self.rest.change_plan_price(found["id"], sl, tp, self.cfg.trend_code, self.cfg.trend_code)
             return {"stop_plan_order_id": str(found["id"]), "stop_price": sl}
+        # No plan order – make sure the position still exists before arming anything new
+        live = [ep for ep in await self.rest.get_open_positions(symbol) if ep.side == side and ep.hold_vol > 0]
+        if not live:
+            raise PositionGone(f"{symbol} {side} is no longer open")
+        vol = live[0].hold_vol or vol
         # Fallback: reduce-only trigger orders
-        ids = await self.place_fallback_triggers(symbol, side, vol, sl, tp, leverage, position_id)
+        ids = await self.place_fallback_triggers(symbol, side, vol, sl, tp, leverage, live[0].position_id or position_id)
         ids["stop_price"] = sl
         return ids
 

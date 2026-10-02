@@ -205,10 +205,34 @@ class MexcFuturesREST:
         data = await self._request("GET", "/api/v1/private/position/open_positions", {"symbol": symbol}, private=True)
         return [ExchangePosition.from_api(d) for d in (data or [])]
 
-    async def get_history_positions(self, symbol: Optional[str] = None, page_size: int = 20) -> List[Dict[str, Any]]:
+    async def get_history_positions(self, symbol: Optional[str] = None, page_size: int = 20,
+                                    position_type: Optional[int] = None) -> List[Dict[str, Any]]:
         data = await self._request("GET", "/api/v1/private/position/list/history_positions",
-                                   {"symbol": symbol, "page_num": 1, "page_size": page_size}, private=True)
+                                   {"symbol": symbol, "type": position_type, "page_num": 1, "page_size": page_size}, private=True)
+        if isinstance(data, dict):  # paginated variant
+            data = data.get("resultList") or []
         return list(data or [])
+
+    async def public_ip(self) -> Dict[str, Any]:
+        """Egress IP as seen by the internet – what MEXC's API whitelist must contain."""
+        providers = ["https://api.ipify.org?format=json", "https://ifconfig.me/all.json",
+                     "https://api.ip.sb/jsonip", "https://ipinfo.io/json",
+                     "https://checkip.amazonaws.com", "http://api.ipify.org?format=json"]
+        errors = []
+        for url in providers:
+            try:
+                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=4), headers={"User-Agent": "curl/8"}) as r:
+                    text = (await r.text()).strip()
+                    try:
+                        j = json.loads(text)
+                        ip = j.get("ip") or j.get("ip_addr")
+                    except json.JSONDecodeError:
+                        ip = text if text.count(".") == 3 and len(text) <= 15 else None
+                    if ip:
+                        return {"ip": ip, "source": url.split("/")[2], "ts": time.time()}
+            except Exception as exc:
+                errors.append(f"{url.split('/')[2]}: {type(exc).__name__}")
+        return {"ip": None, "error": "; ".join(errors)[:300], "ts": time.time()}
 
     async def get_position_mode(self) -> int:
         data = await self._request("GET", "/api/v1/private/position/position_mode", private=True)

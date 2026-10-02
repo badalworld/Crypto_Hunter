@@ -189,6 +189,10 @@ def create_app(settings: AppSettings, cfg: BotConfig, db: Database) -> FastAPI:
     async def signals() -> List[Dict[str, Any]]:
         return _clean(bot.last_signals)
 
+    @app.get("/api/ip", dependencies=[Depends(auth)])
+    async def public_ip(refresh: bool = False) -> Dict[str, Any]:
+        return _clean(await bot.refresh_public_ip(force=refresh))
+
     @app.get("/healthz")
     async def healthz() -> Dict[str, Any]:
         return {"ok": True, "state": bot.state}

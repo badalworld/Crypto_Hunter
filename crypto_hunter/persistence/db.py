@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS positions (
     updated_at REAL NOT NULL,
     signal_json TEXT,
     status TEXT NOT NULL DEFAULT 'open', -- pending | open | closing
+    fee_paid REAL NOT NULL DEFAULT 0,   -- fees charged so far (from MEXC realised while open)
+    funding REAL NOT NULL DEFAULT 0,    -- funding so far (holdFee)
+    exchange_unrealized REAL,           -- MEXC unRealizedPnl
     PRIMARY KEY (symbol, side)
 );
 CREATE TABLE IF NOT EXISTS trades (
@@ -71,7 +74,12 @@ CREATE TABLE IF NOT EXISTS trades (
     contract_size REAL NOT NULL,
     leverage INTEGER NOT NULL,
     margin REAL NOT NULL,
-    pnl REAL,
+    pnl REAL,                           -- NET pnl credited by MEXC (realised)
+    gross_pnl REAL,                     -- price pnl, fees excluded (closeProfitLoss)
+    fee REAL,                           -- trading fees open+close (positive number)
+    funding REAL,                       -- funding (+ received / - paid)
+    exchange_roi REAL,                  -- MEXC profitRatio %
+    pnl_source TEXT,                    -- exchange | estimate
     roi REAL,
     peak_roi REAL,
     reason TEXT,                        -- TP | SL | TRAIL | FAILSAFE | MANUAL | EXTERNAL
@@ -122,7 +130,22 @@ class Database:
         self._db = await aiosqlite.connect(self.path, isolation_level=None)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(SCHEMA)
+        await self._migrate()
         return self
+
+    async def _migrate(self) -> None:
+        """Additive column migrations for databases created by older versions."""
+        wanted = {
+            "trades": {"gross_pnl": "REAL", "fee": "REAL", "funding": "REAL", "exchange_roi": "REAL", "pnl_source": "TEXT"},
+            "positions": {"fee_paid": "REAL NOT NULL DEFAULT 0", "funding": "REAL NOT NULL DEFAULT 0",
+                          "exchange_unrealized": "REAL"},
+        }
+        for table, cols in wanted.items():
+            async with self.db.execute(f"PRAGMA table_info({table})") as cur:
+                have = {r["name"] for r in await cur.fetchall()}
+            for col, typ in cols.items():
+                if col not in have:
+                    await self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
 
     async def close(self) -> None:
         if self._db:

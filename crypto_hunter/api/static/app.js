@@ -63,6 +63,7 @@
     setPill("#pill-md", st.ws_public ? "on" : st.running ? "off" : "");
     setPill("#pill-pr", st.ws_private ? "on" : st.running ? "off" : "");
     $("#pill-lat").textContent = (st.rest_latency_ms || 0).toFixed(0) + " ms";
+    renderIp(st.public_ip);
     $("#btn-start").classList.toggle("hidden", st.running);
     $("#btn-stop").classList.toggle("hidden", !st.running);
     $("#btn-start").disabled = !st.has_credentials;
@@ -70,12 +71,28 @@
     $("#cred-status").classList.toggle("ok", !!st.has_credentials && st.account_ok);
   }
 
+  let IP = null;
+  function renderIp(info) {
+    if (!info) return; IP = info.ip;
+    $("#pill-ip").textContent = "IP " + (info.ip || "unknown");
+    $("#ip-val").textContent = info.ip || (info.error ? "unavailable" : "detecting…");
+    $("#ip-src").textContent = info.ip ? `via ${info.source} · local ${(info.local_ips || []).join(", ") || "–"}` : (info.error || "");
+  }
+  const copyIp = () => { if (!IP) return; navigator.clipboard?.writeText(IP).then(() => toast(`Copied ${IP} – add it to the MEXC API key IP whitelist`, "ok")); };
+  $("#pill-ip").onclick = copyIp; $("#btn-copy-ip").onclick = copyIp;
+  $("#btn-refresh-ip").onclick = async () => { $("#ip-val").textContent = "detecting…"; try { renderIp(await api("/api/ip?refresh=true")); } catch (e) { toast(e.message, "err"); } };
+
   function renderKpis() {
     const a = S.account, m = S.metrics; if (!a || !m) return;
     $("#k-equity").textContent = fmt(a.equity); $("#k-equity-sub").textContent = `${a.currency} · session ${pct(m.session_return_pct)}`;
     $("#k-avail").textContent = fmt(a.available);
-    const up = S.positions.reduce((s, p) => s + (p.unrealized_pnl || 0), 0) || a.unrealized;
-    $("#k-upnl").textContent = (up >= 0 ? "+" : "") + fmt(up, 3); $("#k-upnl").className = "val mono " + cls(up); $("#k-upnl-sub").textContent = `${S.positions.length} open`;
+    const up = S.positions.length ? S.positions.reduce((s, p) => s + (p.unrealized_pnl || 0), 0) : a.unrealized;
+    const net = S.positions.reduce((s, p) => s + (p.net_pnl || 0), 0);
+    $("#k-upnl").textContent = (up >= 0 ? "+" : "") + fmt(up, 3); $("#k-upnl").className = "val mono " + cls(up);
+    $("#k-upnl-sub").textContent = `${S.positions.length} open · net after fees ${net >= 0 ? "+" : ""}${fmt(net, 3)}`;
+    const fees = (m.total_fees || 0) + (m.open_fees || 0), fund = (m.total_funding || 0) + (m.open_funding || 0);
+    $("#k-fees").textContent = "-" + fmt(fees, 3); $("#k-fees").className = "val mono neg";
+    $("#k-fees-sub").textContent = `funding ${fund >= 0 ? "+" : ""}${fmt(fund, 4)} · gross ${m.total_gross_pnl >= 0 ? "+" : ""}${fmt(m.total_gross_pnl, 2)}`;
     const d = m.daily_pnl_equity || m.daily_pnl; $("#k-daily").textContent = (d >= 0 ? "+" : "") + fmt(d, 2); $("#k-daily").className = "val mono " + cls(d);
     $("#k-daily-sub").textContent = `closed ${m.daily_pnl >= 0 ? "+" : ""}${fmt(m.daily_pnl, 2)}`;
     $("#k-wr").textContent = pct(m.win_rate, 0, false); $("#k-wr-sub").textContent = `${m.wins}W / ${m.losses}L · PF ${m.profit_factor == null ? "∞" : fmt(m.profit_factor, 2)}`;
@@ -84,7 +101,7 @@
     $("#k-target-amt").textContent = fmt(m.target_equity, 0); $("#k-target").textContent = pct(m.target_progress_pct, 1, false);
     $("#k-target-bar").style.width = Math.min(100, m.target_progress_pct) + "%";
     $("#k-target-sub").textContent = `needs ${fmt(m.required_daily_growth_pct, 1)}%/day · from ${fmt(m.session_start_equity)}`;
-    $("#tr-pf").textContent = `${m.trades} trades · net ${m.total_pnl >= 0 ? "+" : ""}${fmt(m.total_pnl, 3)} USDT`;
+    $("#tr-pf").textContent = `${m.trades} trades · gross ${m.total_gross_pnl >= 0 ? "+" : ""}${fmt(m.total_gross_pnl, 3)} − fees ${fmt(m.total_fees, 3)} ${m.total_funding >= 0 ? "+" : "−"} funding ${fmt(Math.abs(m.total_funding), 4)} = net ${m.total_pnl >= 0 ? "+" : ""}${fmt(m.total_pnl, 3)} USDT (MEXC realised)${m.estimated_trades ? ` · ${m.estimated_trades} estimated` : ""}`;
   }
 
   function renderPositions(flash) {
@@ -96,7 +113,9 @@
         <td><b>${esc(p.symbol)}</b></td><td><span class="tag ${p.side}">${p.side.toUpperCase()}</span></td>
         <td class="mono">${p.vol} <span class="muted">(${fmt(p.margin)}$ ×${p.leverage})</span></td>
         <td class="mono">${px(p.entry_price)}</td><td class="mono">${px(p.mark_price)}</td>
-        <td class="mono ${cls(p.unrealized_pnl)}">${p.unrealized_pnl >= 0 ? "+" : ""}${fmt(p.unrealized_pnl, 3)}</td>
+        <td class="mono ${cls(p.unrealized_pnl)}">${p.unrealized_pnl >= 0 ? "+" : ""}${fmt(p.unrealized_pnl, 3)}${p.pnl_source === "exchange" ? "" : " <span class='sub'>est</span>"}</td>
+        <td class="mono"><span class="neg">-${fmt((p.fee_paid || 0) + (p.est_close_fee || 0), 4)}</span><div class="sub">${p.funding >= 0 ? "+" : ""}${fmt(p.funding, 4)}</div></td>
+        <td class="mono ${cls(p.net_pnl)}"><b>${p.net_pnl >= 0 ? "+" : ""}${fmt(p.net_pnl, 3)}</b><div class="sub">${pct(p.net_roi)}</div></td>
         <td class="mono ${cls(p.roi)}">${pct(p.roi)}<div class="roi-bar"><span class="${p.roi < 0 ? "neg" : ""}" style="width:${w}%"></span></div></td>
         <td class="mono">${pct(p.peak_roi)}</td><td class="mono">${px(p.stop_price)}</td>
         <td class="mono ${cls(p.stop_roi_effective)}">${pct(p.stop_roi_effective, 0)}</td><td class="mono">${px(p.tp_price)}</td>
@@ -116,7 +135,11 @@
     const tb = $("#tbl-trades tbody"); $("#tr-empty").classList.toggle("hidden", S.trades.length > 0);
     tb.innerHTML = S.trades.slice(0, 300).map((t, i) => `<tr class="${flash && i === 0 ? "flash" : ""}"><td class="muted">${dt(t.closed_at)}</td><td><b>${esc(t.symbol)}</b></td>
       <td><span class="tag ${t.side}">${t.side.toUpperCase()}</span></td><td class="mono">${px(t.entry_price)}</td><td class="mono">${px(t.exit_price)}</td>
-      <td class="mono ${cls(t.pnl)}">${t.pnl >= 0 ? "+" : ""}${fmt(t.pnl, 3)}</td><td class="mono ${cls(t.roi)}">${pct(t.roi)}</td><td class="mono">${pct(t.peak_roi)}</td>
+      <td class="mono ${cls(t.gross_pnl)}">${t.gross_pnl == null ? "–" : (t.gross_pnl >= 0 ? "+" : "") + fmt(t.gross_pnl, 3)}</td>
+      <td class="mono neg">${t.fee == null ? "–" : "-" + fmt(t.fee, 4)}</td>
+      <td class="mono ${cls(t.funding)}">${t.funding == null ? "–" : (t.funding >= 0 ? "+" : "") + fmt(t.funding, 4)}</td>
+      <td class="mono ${cls(t.pnl)}"><b>${t.pnl >= 0 ? "+" : ""}${fmt(t.pnl, 3)}</b>${t.pnl_source === "estimate" ? " <span class='sub'>est</span>" : ""}</td>
+      <td class="mono ${cls(t.roi)}">${pct(t.roi)}${t.exchange_roi != null ? `<div class="sub">MEXC ${pct(t.exchange_roi)}</div>` : ""}</td><td class="mono">${pct(t.peak_roi)}</td>
       <td><span class="tag ${esc(t.reason)}">${esc(t.reason)}</span></td><td class="muted">${ago(t.closed_at - t.opened_at)}</td></tr>`).join("");
   }
 

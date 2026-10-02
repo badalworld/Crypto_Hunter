@@ -125,6 +125,7 @@ class ExchangePosition:
     realised: float
     state: int
     unrealized: Optional[float]
+    hold_fee: float = 0.0          # funding so far (+ received / - paid)
     raw: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -143,12 +144,44 @@ class ExchangePosition:
             realised=float(d.get("realised", 0) or 0),
             state=int(d.get("state", 1)),
             unrealized=(float(d["unRealizedPnl"]) if d.get("unRealizedPnl") is not None else None),
+            hold_fee=float(d.get("holdFee", 0) or 0),
             raw=d,
         )
 
     @property
     def side(self) -> str:
         return "long" if self.position_type == 1 else "short"
+
+
+@dataclass
+class PositionLedger:
+    """MEXC's own settlement numbers for a closed position (history_positions).
+
+    realised == close_pnl + fee + funding  (fee is negative when paid).
+    """
+    position_id: int
+    close_avg_price: float
+    close_pnl: float          # closeProfitLoss – price PnL, fees excluded
+    fee: float                # trading fees, signed as MEXC reports (negative = paid)
+    total_fee: float          # absolute accumulated fees (open + close)
+    funding: float            # holdFee (+ received / - paid)
+    realised: float           # net PnL credited to the wallet
+    profit_ratio: float       # realised / initial margin
+    close_vol: float
+    state: int
+
+    @classmethod
+    def from_api(cls, d: Dict[str, Any]) -> "PositionLedger":
+        realised = float(d.get("realised", 0) or 0)
+        close_pnl = float(d["closeProfitLoss"]) if d.get("closeProfitLoss") is not None else realised
+        fee = float(d.get("fee", 0) or 0)
+        total_fee = float(d.get("totalFee", abs(fee)) or abs(fee))
+        return cls(
+            position_id=int(d.get("positionId", 0)), close_avg_price=float(d.get("closeAvgPrice", 0) or 0),
+            close_pnl=close_pnl, fee=fee, total_fee=total_fee, funding=float(d.get("holdFee", 0) or 0),
+            realised=realised, profit_ratio=float(d.get("profitRatio", 0) or 0) * 100.0,
+            close_vol=float(d.get("closeVol", 0) or 0), state=int(d.get("state", 3) or 3),
+        )
 
 
 @dataclass
@@ -182,9 +215,12 @@ class MexcAPIError(Exception):
         self.path = path
         self.payload = payload
 
+    # HTTP transport failures (status used as code) and MEXC's transient/system codes.
+    _TRANSIENT = {429, 500, 502, 503, 504, 510, 600, 10073}
+
     @property
     def retryable(self) -> bool:
-        return self.code in (500, 510, 600, 510, 429, 10073) or self.code >= 500
+        return self.code in self._TRANSIENT
 
 
 def is_nan(x: float) -> bool:
