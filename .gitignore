@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Crypto Hunter runtime state (never commit keys, DB or logs)
+data/
+logs/
+*.sqlite
+*.sqlite-*
+.master_key

@@ -1,0 +1,84 @@
+# =====================================================================
+#  Crypto Hunter – strategy / risk / execution configuration
+#  Every value here can also be edited live from the dashboard Settings
+#  panel (dashboard overrides are persisted in the SQLite settings table).
+#  API credentials are NOT stored here – enter them in the dashboard.
+# =====================================================================
+
+auto_start: false            # start trading automatically on boot when credentials exist
+
+signal:
+  timeframe: Min5            # 5-minute chart
+  ao_fast: 5                 # Awesome Oscillator = SMA5(HL2) - SMA34(HL2)
+  ao_slow: 34
+  atr_period: 14
+  pivot_left: 3              # bars left of an AO pivot
+  pivot_right: 2             # bars right (confirmation lag)
+  min_pivot_distance: 5
+  max_pivot_distance: 60
+  allow_zero_cross_between_pivots: true   # false = strict (AO stays one side of zero between pivots)
+  history_bars: 400
+
+filters:                     # fake-signal filters (all applied before entry)
+  min_divergence_magnitude: 0.15     # |AO2-AO1| / mean|AO|; 0 disables
+  require_confirmation_close: true   # close beyond the 2nd pivot candle's extreme
+  volume_spike_enabled: true
+  volume_lookback: 20
+  volume_multiplier: 1.5             # candle vol > avg(volume_lookback) * multiplier
+  trend_filter: ema_5m               # off | ema_5m | ema_1h | both
+  ema_fast: 50
+  ema_slow: 200
+  min_atr_pct: 0.35                  # skip low-volatility chop
+  cooldown_after_loss_minutes: 60    # per-symbol cooldown after a losing trade
+  cooldown_after_any_exit_minutes: 10
+  max_spread_pct: 0.15
+
+scanner:                     # asset selection
+  top_n: 12                          # trade only the top-N by volatility+volume score
+  candidates_by_volume: 60
+  min_quote_volume_24h: 20000000     # USDT
+  min_price: 0
+  rescan_interval_sec: 120
+  volatility_weight: 0.6             # 60% ATR% rank, 40% volume rank
+  quote_coin: USDT
+  symbol_blacklist: []
+  symbol_whitelist: []
+
+risk:
+  leverage: 10
+  risk_per_trade_pct: 8.0            # margin per trade = equity * 8%
+  sizing_mode: margin                # margin | stop_risk
+  max_open_positions: 10
+  max_positions_per_symbol: 1
+  atr_stop_multiplier: 3.0           # initial SL = 3 x ATR from entry
+  open_type: isolated
+  max_daily_loss_pct: 25             # pause new entries after -25% day (0 disables)
+  min_equity_usdt: 5
+  target_equity_usdt: 10000          # compounding goal shown on dashboard
+  target_days: 7
+
+exits:                       # ROI on margin (price change % x leverage)
+  tp_roi: 200                        # fixed TP at +200% ROI
+  trail_start_roi: 30                # trailing activates at +30% peak ROI
+  trail_initial_stop_roi: 20         # locks +20% at activation
+  trail_step_roi: 10                 # every +10% of peak ROI ...
+  trail_stop_step_roi: 10            # ... raises the stop by +10% ROI
+  peak_price_source: both            # fair | last | both
+  software_failsafe: true
+  failsafe_grace_sec: 3
+  failsafe_breach_pct: 0.05
+
+execution:
+  rest_base_url: https://api.mexc.com
+  legacy_rest_base_url: https://contract.mexc.com
+  ws_url: wss://contract.mexc.com/edge
+  recv_window_sec: 10
+  rate_limit_fraction: 0.95          # use at most 95% of MEXC rate limits
+  http_timeout_sec: 10
+  max_retries: 4
+  retry_backoff_base_sec: 0.25
+  connection_pool_size: 32
+  entry_order_type: market           # market | ioc
+  position_sync_interval_sec: 5
+  equity_snapshot_interval_sec: 30
+  price_trend_source: fair           # trigger reference for exchange TP/SL

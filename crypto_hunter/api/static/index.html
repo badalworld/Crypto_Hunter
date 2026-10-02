@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crypto Hunter · MEXC Futures AO Divergence Bot</title>
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="bg"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span></div>
+
+<header class="top glass">
+  <div class="brand">
+    <div class="logo"><span></span></div>
+    <div>
+      <h1>Crypto Hunter</h1>
+      <p>MEXC Futures · AO Divergence · 5m</p>
+    </div>
+  </div>
+  <div class="statusbar">
+    <div class="pill" id="pill-state"><i></i><b id="state-text">CONNECTING</b></div>
+    <div class="pill small" id="pill-ws" title="Dashboard stream"><i></i>stream</div>
+    <div class="pill small" id="pill-md" title="MEXC market data WS"><i></i>market</div>
+    <div class="pill small" id="pill-pr" title="MEXC private WS"><i></i>account</div>
+    <div class="pill small mono" id="pill-lat" title="REST latency">– ms</div>
+  </div>
+  <div class="actions">
+    <button class="btn ghost" id="btn-settings">⚙ Settings</button>
+    <button class="btn primary" id="btn-start">▶ Start</button>
+    <button class="btn danger hidden" id="btn-stop">■ Stop</button>
+  </div>
+</header>
+
+<main class="grid">
+  <!-- KPI row -->
+  <section class="kpis">
+    <div class="glass kpi"><label>Equity</label><div class="val mono" id="k-equity">–</div><small id="k-equity-sub">USDT</small></div>
+    <div class="glass kpi"><label>Available</label><div class="val mono" id="k-avail">–</div><small>free margin</small></div>
+    <div class="glass kpi"><label>Unrealized</label><div class="val mono" id="k-upnl">–</div><small id="k-upnl-sub">open PnL</small></div>
+    <div class="glass kpi"><label>Daily PnL</label><div class="val mono" id="k-daily">–</div><small id="k-daily-sub">since 00:00 UTC</small></div>
+    <div class="glass kpi"><label>Win rate</label><div class="val mono" id="k-wr">–</div><small id="k-wr-sub">0 trades</small></div>
+    <div class="glass kpi"><label>Avg ROI</label><div class="val mono" id="k-roi">–</div><small id="k-roi-sub">per trade</small></div>
+    <div class="glass kpi"><label>Max DD</label><div class="val mono" id="k-dd">–</div><small>30d equity</small></div>
+    <div class="glass kpi target">
+      <label>Target $<span id="k-target-amt">10,000</span></label>
+      <div class="val mono" id="k-target">–</div>
+      <div class="bar"><span id="k-target-bar"></span></div>
+      <small id="k-target-sub">needs –%/day</small>
+    </div>
+  </section>
+
+  <!-- Equity chart -->
+  <section class="glass card span-8">
+    <div class="card-h"><h2>Equity curve <span class="muted">vs compounding projection</span></h2>
+      <div class="legend"><span class="lg eq">equity</span><span class="lg pj">projection</span><span class="lg tg">target</span></div></div>
+    <canvas id="equity-chart" height="260"></canvas>
+  </section>
+
+  <!-- Watchlist -->
+  <section class="glass card span-4">
+    <div class="card-h"><h2>Watch-list <span class="muted" id="wl-count"></span></h2><span class="muted" id="wl-ts"></span></div>
+    <div class="tbl-wrap"><table class="tbl" id="tbl-watch"><thead><tr><th>#</th><th>Symbol</th><th>Price</th><th>ATR%</th><th>24h vol</th><th>24h</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <!-- Positions -->
+  <section class="glass card span-12">
+    <div class="card-h"><h2>Active positions <span class="muted" id="pos-count"></span></h2>
+      <button class="btn tiny danger" id="btn-close-all">Close all</button></div>
+    <div class="tbl-wrap"><table class="tbl" id="tbl-pos"><thead><tr>
+      <th>Symbol</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th><th>PnL</th><th>ROI</th><th>Peak ROI</th><th>Stop</th><th>Stop ROI</th><th>TP</th><th>Trail</th><th>Age</th><th></th>
+    </tr></thead><tbody></tbody></table></div>
+    <div class="empty" id="pos-empty">No open positions</div>
+  </section>
+
+  <!-- Trades -->
+  <section class="glass card span-7">
+    <div class="card-h"><h2>Trade history</h2><span class="muted mono" id="tr-pf"></span></div>
+    <div class="tbl-wrap tall"><table class="tbl" id="tbl-trades"><thead><tr>
+      <th>Closed</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th><th>PnL</th><th>ROI</th><th>Peak</th><th>Reason</th><th>Held</th>
+    </tr></thead><tbody></tbody></table></div>
+    <div class="empty" id="tr-empty">No closed trades yet</div>
+  </section>
+
+  <!-- Signals + events -->
+  <section class="glass card span-5">
+    <div class="tabs"><button class="tab active" data-tab="events">Activity</button><button class="tab" data-tab="signals">Signals</button><button class="tab" data-tab="limits">API budget</button></div>
+    <div class="tabpane" id="pane-events"><ul class="feed" id="feed"></ul></div>
+    <div class="tabpane hidden" id="pane-signals"><ul class="feed" id="signals"></ul></div>
+    <div class="tabpane hidden" id="pane-limits"><div id="limits"></div></div>
+  </section>
+</main>
+
+<!-- Settings drawer -->
+<div class="drawer-bg hidden" id="drawer-bg"></div>
+<aside class="drawer glass hidden" id="drawer">
+  <div class="drawer-h"><h2>Settings</h2><button class="btn ghost tiny" id="btn-close-drawer">✕</button></div>
+  <div class="drawer-body">
+    <section class="set-group">
+      <h3>MEXC API credentials</h3>
+      <p class="muted small">Stored encrypted (Fernet) on the server. Enable <b>Futures – order placing</b> on the key and bind your server IP.</p>
+      <div class="cred-status" id="cred-status">No credentials</div>
+      <label>API Key<input type="password" id="in-key" autocomplete="off" placeholder="mx0…"></label>
+      <label>Secret Key<input type="password" id="in-secret" autocomplete="off" placeholder="••••••••"></label>
+      <div class="row"><button class="btn primary" id="btn-save-creds">Save & verify</button><button class="btn danger ghost" id="btn-del-creds">Remove</button></div>
+      <div class="msg" id="cred-msg"></div>
+    </section>
+    <form id="cfg-form"></form>
+    <div class="row sticky"><button class="btn primary" id="btn-save-cfg">Apply configuration</button><span class="msg" id="cfg-msg"></span></div>
+  </div>
+</aside>
+
+<div class="toast-wrap" id="toasts"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
